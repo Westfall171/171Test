@@ -1,0 +1,359 @@
+Authentication (/auth)
+
+POST /auth/register
+
+Body: { email, password, full_name }
+
+Action: Creates a new user record in the users table.
+
+Response: User details (without password), Auth Token.
+
+POST /auth/login
+
+Body: { email, password }
+
+Action: Verifies credentials, generates an Auth Token.
+
+Response: Auth Token, User details.
+
+POST /auth/logout
+
+Requires Auth Token.
+
+Action: Invalidates the Auth Token (implementation depends on token strategy).
+
+Response: Success message.
+
+GET /auth/me
+
+Requires Auth Token.
+
+Action: Retrieves the profile details of the currently authenticated user.
+
+Response: User details including active roles.
+
+User Profile & Roles (/users, /roles)
+
+GET /users/me (Same as GET /auth/me)
+
+PUT /users/me
+
+Requires Auth Token.
+
+Body: { full_name, /* other updatable user fields */ }
+
+Action: Updates the authenticated user's profile details.
+
+Response: Updated user details.
+
+GET /users/me/roles
+
+Requires Auth Token.
+
+Action: Lists the roles the user has opted into and their status/details.
+
+Response: Array of user_roles objects.
+
+POST /users/me/roles
+
+Requires Auth Token.
+
+Body: { role_id, is_active, role_specific_details } (e.g., for Transporter: { "service_radius_km": 50 })
+
+Action: Opts the user into a new role or updates details/status of an existing role. Handles UNIQUE (user_id, role_id) constraint.
+
+Response: The created/updated user_roles object.
+
+GET /roles
+
+Action: Lists all available roles in the system.
+
+Response: Array of roles objects.
+
+Locations (/users/me/locations, /locations)
+
+POST /users/me/locations
+
+Requires Auth Token.
+
+Body: { purpose, address_line1, city, postal_code, country, latitude?, longitude?, is_primary_for_purpose? }
+
+Action: Adds a new location for the authenticated user.
+
+Response: Created locations object.
+
+GET /users/me/locations
+
+Requires Auth Token.
+
+Query Params: ?purpose=Seller Pickup (optional filter)
+
+Action: Lists locations associated with the authenticated user.
+
+Response: Array of locations objects.
+
+PUT /locations/{location_id}
+
+Requires Auth Token & Ownership check.
+
+Body: { address_line1, ..., is_primary_for_purpose } (Fields to update)
+
+Action: Updates a specific location.
+
+Response: Updated locations object.
+
+DELETE /locations/{location_id}
+
+Requires Auth Token & Ownership check.
+
+Action: Deletes a specific location (consider implications if it's linked to active items/orders).
+
+Response: Success message.
+
+Items (/items)
+
+POST /items (Seller Action)
+
+Requires Auth Token & Seller Role.
+
+Body: { title, description, price, category, photos?, pickup_location_id, is_stocker_managed?, stocker_user_id?, stocker_fee_proposal?, delivery_fee_proposal? }
+
+Action: Creates a new item listing. Sets seller_user_id, current_holder_user_id initially to the seller.
+
+Response: Created items object.
+
+GET /items (Buyer/Public Action)
+
+Query Params: ?category=X&location=Y&max_price=Z&search=term (for filtering/searching)
+
+Action: Lists available items for browsing. Only shows items with status = 'available'. Avoid showing precise seller location here.
+
+Response: Array of items objects (limited details).
+
+GET /items/{item_id} (Buyer/Public Action)
+
+Action: Retrieves details for a specific item.
+
+Response: Detailed items object (still cautious about precise location unless necessary).
+
+GET /users/me/items (Seller Action)
+
+Query Params: ?status=available
+
+Action: Lists items listed by the authenticated seller.
+
+Response: Array of seller's items objects.
+
+PUT /items/{item_id} (Seller Action)
+
+Requires Auth Token & Ownership check.
+
+Body: Fields to update (e.g., price, description, status - e.g., to 'archived').
+
+Action: Updates the seller's item listing. Should prevent updates if status is 'in_transaction' or 'sold'.
+
+Response: Updated items object.
+
+DELETE /items/{item_id} (Seller Action)
+
+Requires Auth Token & Ownership check.
+
+Action: Deletes an item listing (only if not sold/in transaction).
+
+Response: Success message.
+
+POST /items/{item_id}/duplicate (Seller Action)
+
+Requires Auth Token & Ownership check.
+
+Action: Creates a new item by copying details from the specified item_id.
+
+Response: The newly created items object.
+
+Orders (/orders)
+
+POST /orders (Buyer Action)
+
+Requires Auth Token & Buyer Role.
+
+Body: { item_id, buyer_delivery_location_id }
+
+Action: Creates a new order for an available item. Sets initial status ('Pending Confirmation'), copies price/fees, links Buyer/Seller/Item, sets Item.status to 'in_transaction'.
+
+Response: Created orders object.
+
+GET /orders
+
+Requires Auth Token.
+
+Query Params: ?role=buyer&status=Completed, ?role=seller&status=Pending Confirmation, ?role=transporter&status=In Transit etc.
+
+Action: Lists orders relevant to the authenticated user based on their role(s) and specified filters.
+
+Response: Array of orders objects.
+
+GET /orders/{order_id}
+
+Requires Auth Token & User must be involved in the order (Buyer, Seller, Transporter, Stocker).
+
+Action: Retrieves full details of a specific order.
+
+Response: Detailed orders object including related participants if needed.
+
+PUT /orders/{order_id}/confirm (Seller Action)
+
+Requires Auth Token & Seller is the seller on this order.
+
+Action: Seller confirms/accepts the order. Updates order_status (e.g., to 'Ready for Pickup' or 'Awaiting Transport Acceptance').
+
+Response: Updated orders object.
+
+PUT /orders/{order_id}/cancel (Buyer/Seller Action)
+
+Requires Auth Token & User is Buyer or Seller.
+
+Action: Cancels an order (only possible in certain early statuses). Resets Item.status to 'available'. Add record to order_status_history.
+
+Response: Updated orders object.
+
+PUT /orders/{order_id}/accept-transport (Transporter Action)
+
+Requires Auth Token & Transporter Role.
+
+Action: Transporter accepts the job. Uses atomic update (as discussed) to assign transporter_user_id. Updates order_status (e.g., 'Transport Accepted').
+
+Response: Updated orders object (or error if already taken).
+
+PUT /orders/{order_id}/confirm-pickup-initiate (Seller/Stocker Action)
+
+Requires Auth Token & User is Seller/Stocker holding the item.
+
+Action: Seller/Stocker confirms they are handing over the item. Updates order_status to 'Pickup Confirmed by Initiator'.
+
+Response: Updated orders object.
+
+PUT /orders/{order_id}/confirm-pickup-complete (Transporter Action)
+
+Requires Auth Token & User is assigned Transporter. Order status must be 'Pickup Confirmed by Initiator'.
+
+Action: Transporter confirms receiving the item. Updates order_status to 'Pickup Confirmed', updates Item.current_holder_user_id to Transporter.
+
+Response: Updated orders object.
+
+PUT /orders/{order_id}/update-transit (Transporter Action)
+
+Requires Auth Token & User is assigned Transporter.
+
+Body: { status: 'In Transit' /* or potentially location update */ }
+
+Action: Updates order_status to 'In Transit'.
+
+Response: Updated orders object.
+
+PUT /orders/{order_id}/confirm-delivery-initiate (Transporter Action)
+
+Requires Auth Token & User is assigned Transporter.
+
+Action: Transporter confirms they are handing over item to Buyer. Updates order_status to 'Delivery Confirmed by Initiator'.
+
+Response: Updated orders object.
+
+PUT /orders/{order_id}/confirm-delivery-complete (Buyer Action)
+
+Requires Auth Token & User is Buyer. Order status must be 'Delivery Confirmed by Initiator'.
+
+Action: Buyer confirms receiving the item. Updates order_status to 'Delivery Confirmed', updates Item.current_holder_user_id to Buyer. Potentially triggers final 'Completed' status if no more steps.
+
+Response: Updated orders object.
+
+PUT /orders/{order_id}/flag-review (Any involved party Action)
+
+Requires Auth Token & User involved in order.
+
+Body: { notes: "Reason for flagging" }
+
+Action: Sets needs_admin_review = true and stores notes. Updates status to 'Flagged for Review'.
+
+Response: Updated orders object.
+
+Transport Jobs (/transport-jobs)
+
+GET /transport-jobs (Transporter Action)
+
+Requires Auth Token & Transporter Role.
+
+Query Params: ?latitude=X&longitude=Y&radius=Z&max_distance=A&min_fee=B
+
+Action: Retrieves Orders needing transport (order_status = 'Awaiting Transport Acceptance') filtered by location/fee etc. This endpoint essentially queries the orders table with specific criteria.
+
+Response: Array of orders objects suitable for job listings (pickup/delivery locations simplified, fee shown).
+
+Ratings (/orders/{order_id}/ratings)
+
+POST /orders/{order_id}/ratings
+
+Requires Auth Token & User involved in the order. Order must be 'Completed'.
+
+Body: { rated_user_id, rated_role_id, score, comment? }
+
+Action: Creates a rating for another user involved in this completed order. Checks for duplicates.
+
+Response: Created ratings object.
+
+GET /orders/{order_id}/ratings
+
+Requires Auth Token & User involved.
+
+Action: Retrieves ratings given within the context of this order.
+
+Response: Array of ratings objects.
+
+GET /users/{user_id}/ratings
+
+Query Params: ?as_role=Seller (optional filter)
+
+Action: Retrieves ratings received by a specific user, optionally filtered by the role they were performing.
+
+Response: Array of ratings objects, possibly aggregated stats (avg score).
+
+Chat (/orders/{order_id}/messages)
+
+POST /orders/{order_id}/messages
+
+Requires Auth Token & User involved in order.
+
+Body: { message_text }
+
+Action: Sends a message within the chat context of a specific order.
+
+Response: Created chat_messages object.
+
+GET /orders/{order_id}/messages
+
+Requires Auth Token & User involved in order.
+
+Query Params: ?since={timestamp/message_id} (for polling/pagination)
+
+Action: Retrieves messages for a specific order. Implement pagination.
+
+Response: Array of chat_messages objects.
+
+Admin (/admin - separate authorization likely)
+
+GET /admin/orders/flagged
+
+Requires Admin Auth.
+
+Action: Lists orders where needs_admin_review = true.
+
+Response: Array of flagged orders objects.
+
+PUT /admin/orders/{order_id}/resolve
+
+Requires Admin Auth.
+
+Body: { new_status, new_holder_user_id?, resolution_notes }
+
+Action: Manually overrides order status and potentially item holder after external adjudication. Records action in history. Resets needs_admin_review flag.
+
+Response: Updated orders object.
